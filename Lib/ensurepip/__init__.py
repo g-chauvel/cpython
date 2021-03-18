@@ -1,3 +1,4 @@
+import glob
 import os
 import os.path
 import pkgutil
@@ -8,14 +9,39 @@ import tempfile
 
 __all__ = ["version", "bootstrap"]
 
+def _ensurepip_is_disabled_in_debian_for_system():
+    # Detect if ensurepip is being executed inside of a python-virtualenv
+    # environment and return early if so.
+    if hasattr(sys, 'real_prefix'):
+        return
 
-_SETUPTOOLS_VERSION = "47.1.0"
+    # Detect if ensurepip is being executed inside of a stdlib venv
+    # environment and return early if so.
+    if sys.prefix != getattr(sys, "base_prefix", sys.prefix):
+        return
 
-_PIP_VERSION = "20.1.1"
+    # If we've gotten here, then we are running inside of the system Python
+    # and we don't want to use ensurepip to install into the system Python
+    # so instead we'll redirect the user to using dpkg and apt-get.
+    print('''\
+ensurepip is disabled in Debian/Ubuntu for the system python.
+
+Python modules for the system python are usually handled by dpkg and apt-get.
+
+    apt-get install python-<module name>
+
+Install the python-pip package to use pip itself.  Using pip together
+with the system python might have unexpected results for any system installed
+module, so use it on your own risk, or make sure to only use it in virtual
+environments.
+''')
+    sys.exit(1)
+
 
 _PROJECTS = [
-    ("setuptools", _SETUPTOOLS_VERSION, "py3"),
-    ("pip", _PIP_VERSION, "py2.py3"),
+    "setuptools",
+    "pip",
+    "pkg_resources",
 ]
 
 
@@ -42,7 +68,9 @@ def version():
     """
     Returns a string specifying the bundled version of pip.
     """
-    return _PIP_VERSION
+    wheel_names = glob.glob('/usr/share/python-wheels/pip-*.whl')
+    assert len(wheel_names) == 1, wheel_names
+    return os.path.basename(wheel_names[0]).split('-')[1]
 
 def _disable_pip_configuration_settings():
     # We deliberately ignore all pip environment variables
@@ -80,6 +108,11 @@ def _bootstrap(*, root=None, upgrade=False, user=False,
 
     Note that calling this function will alter both sys.path and os.environ.
     """
+
+    # Ensure that we are only running this inside of a virtual environment
+    # of some kind.
+    _ensurepip_is_disabled_in_debian_for_system()
+
     if altinstall and default_pip:
         raise ValueError("Cannot use altinstall and default_pip together")
 
@@ -100,20 +133,44 @@ def _bootstrap(*, root=None, upgrade=False, user=False,
         # omit pip and easy_install
         os.environ["ENSUREPIP_OPTIONS"] = "install"
 
+    # Debian: The bundled wheels are useless to us because we must use ones
+    # crafted from source code in the archive.  As we build the virtual
+    # environment, copy the wheels from the system location into the virtual
+    # environment, and place those wheels on sys.path.
+    def copy_wheels(wheels, destdir, paths):
+        for project in wheels:
+            wheel_names = glob.glob(
+                '/usr/share/python-wheels/{}-*.whl'.format(project))
+            if len(wheel_names) == 0:
+                raise RuntimeError('missing dependency wheel %s' % project)
+            assert len(wheel_names) == 1, wheel_names
+            wheel_name = os.path.basename(wheel_names[0])
+            path = os.path.join('/usr/share/python-wheels', wheel_name)
+            with open(path, 'rb') as fp:
+                whl = fp.read()
+            dest = os.path.join(destdir, wheel_name)
+            with open(dest, 'wb') as fp:
+                fp.write(whl)
+            paths.append(dest)
+
     with tempfile.TemporaryDirectory() as tmpdir:
+        # This directory is a "well known directory" which Debian has patched
+        # pip to look in when attempting to locate wheels to use to satisfy
+        # the dependencies that pip normally bundles but Debian has debundled.
+        # This is critically important and if this directory changes then both
+        # python-pip and python-virtualenv needs updated to match.
+        venv_wheel_dir = os.path.join(sys.prefix, 'share', 'python-wheels')
+        os.makedirs(venv_wheel_dir, exist_ok=True)
+        dependencies = [
+            os.path.basename(whl).split('-')[0]
+            for whl in glob.glob('/usr/share/python-wheels/*.whl')
+            ]
+        copy_wheels(dependencies, venv_wheel_dir, sys.path)
+
         # Put our bundled wheels into a temporary directory and construct the
         # additional paths that need added to sys.path
         additional_paths = []
-        for project, version, py_tag in _PROJECTS:
-            wheel_name = "{}-{}-{}-none-any.whl".format(project, version, py_tag)
-            whl = pkgutil.get_data(
-                "ensurepip",
-                "_bundled/{}".format(wheel_name),
-            )
-            with open(os.path.join(tmpdir, wheel_name), "wb") as fp:
-                fp.write(whl)
-
-            additional_paths.append(os.path.join(tmpdir, wheel_name))
+        copy_wheels(_PROJECTS, tmpdir, additional_paths)
 
         # Construct the arguments to be passed to the pip command
         args = ["install", "--no-cache-dir", "--no-index", "--find-links", tmpdir]
@@ -126,7 +183,7 @@ def _bootstrap(*, root=None, upgrade=False, user=False,
         if verbosity:
             args += ["-" + "v" * verbosity]
 
-        return _run_pip(args + [p[0] for p in _PROJECTS], additional_paths)
+        return _run_pip(args + _PROJECTS, additional_paths)
 
 def _uninstall_helper(*, verbosity=0):
     """Helper to support a clean default uninstall process on Windows
@@ -140,7 +197,8 @@ def _uninstall_helper(*, verbosity=0):
         return
 
     # If the pip version doesn't match the bundled one, leave it alone
-    if pip.__version__ != _PIP_VERSION:
+    # Disabled for Debian, always using the version from the python3-pip package.
+    if False and pip.__version__ != _PIP_VERSION:
         msg = ("ensurepip will only uninstall a matching version "
                "({!r} installed, {!r} bundled)")
         print(msg.format(pip.__version__, _PIP_VERSION), file=sys.stderr)
@@ -153,7 +211,7 @@ def _uninstall_helper(*, verbosity=0):
     if verbosity:
         args += ["-" + "v" * verbosity]
 
-    return _run_pip(args + [p[0] for p in reversed(_PROJECTS)])
+    return _run_pip(args + reversed(_PROJECTS))
 
 
 def _main(argv=None):

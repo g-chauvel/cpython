@@ -86,10 +86,18 @@ __all__ = [
 
 import os as _os
 import re as _re
-import shutil as _shutil
 import sys as _sys
 
-from gettext import gettext as _, ngettext
+try:
+    from gettext import gettext as _, ngettext
+except ImportError:
+    def _(message):
+        return message
+    def ngettext(singular,plural,n):
+        if n == 1:
+            return singular
+        else:
+            return plural
 
 SUPPRESS = '==SUPPRESS=='
 
@@ -166,8 +174,12 @@ class HelpFormatter(object):
 
         # default setting for width
         if width is None:
-            width = _shutil.get_terminal_size().columns
-            width -= 2
+            try:
+                import shutil as _shutil
+                width = _shutil.get_terminal_size().columns
+                width -= 2
+            except ImportError:
+                width = 70
 
         self._prog = prog
         self._indent_increment = indent_increment

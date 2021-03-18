@@ -75,7 +75,7 @@ if test "$cross_compiling" = yes; then
 	    AC_MSG_ERROR([python$PACKAGE_VERSION interpreter not found])
 	fi
         AC_MSG_RESULT($interp)
-	PYTHON_FOR_BUILD='_PYTHON_PROJECT_BASE=$(abs_builddir) _PYTHON_HOST_PLATFORM=$(_PYTHON_HOST_PLATFORM) PYTHONPATH=$(shell test -f pybuilddir.txt && echo $(abs_builddir)/`cat pybuilddir.txt`:)$(srcdir)/Lib _PYTHON_SYSCONFIGDATA_NAME=_sysconfigdata_$(ABIFLAGS)_$(MACHDEP)_$(MULTIARCH) '$interp
+	PYTHON_FOR_BUILD='_PYTHON_PROJECT_BASE=$(abs_builddir) _PYTHON_HOST_PLATFORM=$(_PYTHON_HOST_PLATFORM) PYTHONPATH=$(shell test -f pybuilddir.txt && echo $(abs_builddir)/`cat pybuilddir.txt`:)$(srcdir)/Lib _PYTHON_SYSCONFIGDATA_NAME=_sysconfigdata_$(ABIFLAGS)_$(MULTIARCH) '$interp
     fi
 elif test "$cross_compiling" = maybe; then
     AC_MSG_ERROR([Cross compiling required --host=HOST-TUPLE and --build=ARCH])
@@ -2598,8 +2598,8 @@ then
 		fi
 		;;
 	Linux*|GNU*|QNX*|VxWorks*)
-		LDSHARED='$(CC) -shared'
-		LDCXXSHARED='$(CXX) -shared';;
+		LDSHARED='$(CC) -shared -Wl,-O1 -Wl,-Bsymbolic-functions'
+		LDCXXSHARED='$(CXX) -shared -Wl,-O1 -Wl,-Bsymbolic-functions';;
 	FreeBSD*)
 		if [[ "`$CC -dM -E - </dev/null | grep __ELF__`" != "" ]]
 		then
@@ -2692,7 +2692,7 @@ then
 	    LINKFORSHARED="-Wl,-E -Wl,+s";;
 #	    LINKFORSHARED="-Wl,-E -Wl,+s -Wl,+b\$(BINLIBDEST)/lib-dynload";;
 	Linux-android*) LINKFORSHARED="-pie -Xlinker -export-dynamic";;
-	Linux*|GNU*) LINKFORSHARED="-Xlinker -export-dynamic";;
+	Linux*|GNU*) LINKFORSHARED="-Xlinker -export-dynamic -Wl,-O1 -Wl,-Bsymbolic-functions";;
 	# -u libsys_s pulls in all symbols in libsys
 	Darwin/*)
 		LINKFORSHARED="$extra_undefs -framework CoreFoundation"
@@ -4510,8 +4510,13 @@ int main(void) {
 AC_MSG_RESULT($ac_cv_posix_semaphores_enabled)
 if test $ac_cv_posix_semaphores_enabled = no
 then
-  AC_DEFINE(POSIX_SEMAPHORES_NOT_ENABLED, 1,
-            [Define if POSIX semaphores aren't enabled on your system])
+  case $ac_sys_system in
+    Linux*) # assume yes, see https://launchpad.net/bugs/630511
+      ;;
+    *)
+      AC_DEFINE(POSIX_SEMAPHORES_NOT_ENABLED, 1,
+                [Define if POSIX semaphores aren't enabled on your system])
+  esac
 fi
 
 # Multiprocessing check for broken sem_getvalue
@@ -4546,8 +4551,13 @@ int main(void){
 AC_MSG_RESULT($ac_cv_broken_sem_getvalue)
 if test $ac_cv_broken_sem_getvalue = yes
 then
-  AC_DEFINE(HAVE_BROKEN_SEM_GETVALUE, 1,
-  [define to 1 if your sem_getvalue is broken.])
+  case $ac_sys_system in
+    Linux*) # assume yes, see https://launchpad.net/bugs/630511
+      ;;
+    *)
+      AC_DEFINE(HAVE_BROKEN_SEM_GETVALUE, 1,
+      [define to 1 if your sem_getvalue is broken.])
+  esac
 fi
 
 AC_CHECK_DECLS([RTLD_LAZY, RTLD_NOW, RTLD_GLOBAL, RTLD_LOCAL, RTLD_NODELETE, RTLD_NOLOAD, RTLD_DEEPBIND, RTLD_MEMBER], [], [], [[#include <dlfcn.h>]])

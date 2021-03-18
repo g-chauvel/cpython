@@ -32,6 +32,7 @@ help:
 	@echo "  htmlview   to open the index page built by the html target in your browser"
 	@echo "  htmlhelp   to make HTML files and a HTML help project"
 	@echo "  latex      to make LaTeX files, you can set PAPER=a4 or PAPER=letter"
+	@echo "  texinfo    to make Texinfo files"
 	@echo "  text       to make plain text files"
 	@echo "  texinfo    to make Texinfo file"
 	@echo "  epub       to make EPUB files"
@@ -85,6 +86,11 @@ latex: build
 	@echo "Build finished; the LaTeX files are in build/latex."
 	@echo "Run \`make all-pdf' or \`make all-ps' in that directory to" \
 	      "run these through (pdf)latex."
+
+texinfo: BUILDER = texinfo
+texinfo: build
+	@echo "Build finished; the Texinfo files are in build/texinfo."
+	@echo "Run \`make\' in that directory to run these through makeinfo."
 
 text: BUILDER = text
 text: build

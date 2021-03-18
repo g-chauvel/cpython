@@ -345,9 +345,8 @@ def get_makefile_filename():
 
 def _get_sysconfigdata_name():
     return os.environ.get('_PYTHON_SYSCONFIGDATA_NAME',
-        '_sysconfigdata_{abi}_{platform}_{multiarch}'.format(
+        '_sysconfigdata_{abi}_{multiarch}'.format(
         abi=sys.abiflags,
-        platform=sys.platform,
         multiarch=getattr(sys.implementation, '_multiarch', ''),
     ))
 
@@ -557,6 +556,12 @@ def get_config_vars(*args):
         # init function to enable using 'get_config_var' in
         # the init-function.
         _CONFIG_VARS['userbase'] = _getuserbase()
+
+        multiarch = get_config_var('MULTIARCH')
+        if multiarch:
+            _CONFIG_VARS['multiarchsubdir'] = '/' + multiarch
+        else:
+            _CONFIG_VARS['multiarchsubdir'] = ''
 
         # Always convert srcdir to an absolute path
         srcdir = _CONFIG_VARS.get('srcdir', _PROJECT_BASE)
