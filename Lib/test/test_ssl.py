@@ -2287,6 +2287,71 @@ class SimpleBackgroundTests(unittest.TestCase):
         self.ssl_io_loop(sock, incoming, outgoing, sslobj.unwrap)
 
 
+class SimpleClientServerTest(unittest.TestCase):
+    """Tests that connect to a simple server running in the background"""
+
+    def setUp(self):
+        self._setUp()
+
+    def _pristineSetup(self):
+        server = ThreadedEchoServer(SIGNED_CERTFILE)
+        self.server_addr = (HOST, server.port)
+        server.__enter__()
+        self.addCleanup(server.__exit__, None, None, None)
+    
+    def _setUp(self):
+        server = ThreadedEchoServer(
+            certificate=SIGNED_CERTFILE,
+            ssl_version=ssl.PROTOCOL_TLS,
+            certreqs=ssl.CERT_REQUIRED,
+            cacerts=SIGNING_CA
+            )
+        self.server_addr = (HOST, server.port)
+        server.__enter__()
+        self.addCleanup(server.__exit__, None, None, None)
+
+    def test_connect(self):
+        self._test_connect()
+        
+        # just to make sure poll event isn't coming from socket RST
+        time.sleep(2)
+
+    def _pristine_test_connect(self):
+        with test_wrap_socket(socket.socket(socket.AF_INET),
+                            cert_reqs=ssl.CERT_NONE) as s:
+            s.connect(self.server_addr)
+            self.assertEqual({}, s.getpeercert())
+            self.assertFalse(s.server_side)
+            time.sleep(1)
+
+    def _test_connect(self):
+        s = socket.socket(socket.AF_INET)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS)
+        # with ssl.OP_NO_TLSv1_3 (TLSv1.2 is used), no fd event
+        # without ss.OP_NO_TLSv1_3, fd event  recv blocks even with setblocking(False)
+        # context.options |= ssl.OP_NO_TLSv1_3
+        context.verify_mode = ssl.CERT_REQUIRED
+        context.check_hostname = False
+        context.load_verify_locations(SIGNING_CA)
+        context.load_cert_chain(SIGNED_CERTFILE)
+        s = context.wrap_socket(s, server_hostname=HOST)
+        s.connect(self.server_addr)
+        s.setblocking(False)
+
+        poll = select.poll()
+        bitmask = (select.POLLIN | select.POLLERR |
+                   select.POLLHUP | select.POLLNVAL)
+        poll.register(s, bitmask)
+        sys.stdout.write("POLL before poll\n")
+        ret = poll.poll(3000)
+        sys.stdout.write("POLL after poll\n")
+        for fd, event in ret:
+            sys.stdout.write("POLL before recv fd:{} event:{} s.fileno:{}\n".format(fd, event, s.fileno()))
+            recv = s.recv(4096)
+            sys.stdout.write("POLL after recv fd:{} event:{}\n".format(fd, event))
+        sys.stdout.write("_test_connect EXIT\n")
+
+
 class NetworkedTests(unittest.TestCase):
 
     def test_timeout_connect_ex(self):
@@ -2421,6 +2486,7 @@ class ThreadedEchoServer(threading.Thread):
             if self.sslconn:
                 return self.sslconn.write(bytes)
             else:
+                sys.stdout.write("SOCKET WRITE 1\n")
                 return self.sock.send(bytes)
 
         def close(self):
@@ -2660,6 +2726,7 @@ class AsyncoreEchoServer(threading.Thread):
                     if not data:
                         self.close()
                     else:
+                        sys.stdout.write("SOCKET WRITE 2\n")
                         self.send(data.lower())
 
             def handle_close(self):
@@ -3409,6 +3476,7 @@ class ThreadedTests(unittest.TestCase):
                     sys.stdout.write(
                         " client:  sending %r...\n" % indata)
                 if wrapped:
+                    sys.stdout.write("SOCKET WRITE 3\n")
                     conn.write(indata)
                     outdata = conn.read()
                 else:
@@ -3438,6 +3506,7 @@ class ThreadedTests(unittest.TestCase):
             if support.verbose:
                 sys.stdout.write(" client:  closing connection.\n")
             if wrapped:
+                sys.stdout.write("SOCKET WRITE 4\n")
                 conn.write(b"over\n")
             else:
                 s.send(b"over\n")
@@ -3581,6 +3650,7 @@ class ThreadedTests(unittest.TestCase):
             for meth_name, recv_meth, expect_success, args in recv_methods:
                 indata = (data_prefix + meth_name).encode('ascii')
                 try:
+                    sys.stdout.write("SOCKET WRITE 5\n")
                     s.send(indata)
                     outdata = recv_meth(*args)
                     if outdata != indata.lower():
@@ -3611,6 +3681,7 @@ class ThreadedTests(unittest.TestCase):
 
             # read(-1, buffer) is supported, even though read(-1) is not
             data = b"data"
+            sys.stdout.write("SOCKET WRITE 6\n")
             s.send(data)
             buffer = bytearray(len(data))
             self.assertEqual(s.read(-1, buffer), len(data))
@@ -3648,6 +3719,7 @@ class ThreadedTests(unittest.TestCase):
         self.addCleanup(s.close)
 
         # recv/read(0) should return no data
+        sys.stdout.write("SOCKET WRITE 7\n")
         s.send(b"data")
         self.assertEqual(s.recv(0), b"")
         self.assertEqual(s.read(0), b"")
@@ -3679,6 +3751,7 @@ class ThreadedTests(unittest.TestCase):
             # will be full and the call will block
             buf = bytearray(8192)
             def fill_buffer():
+                sys.stdout.write("SOCKET WRITE 8\n")
                 while True:
                     s.send(buf)
             self.assertRaises((ssl.SSLWantWriteError,
@@ -3759,6 +3832,7 @@ class ThreadedTests(unittest.TestCase):
             # Block on the accept and wait on the connection to close.
             evt.set()
             remote, peer = server.accept()
+            sys.stdout.write("SOCKET WRITE 9\n")
             remote.send(remote.recv(4))
 
         t = threading.Thread(target=serve)
@@ -3767,6 +3841,7 @@ class ThreadedTests(unittest.TestCase):
         evt.wait()
         client = context.wrap_socket(socket.socket())
         client.connect((host, port))
+        sys.stdout.write("SOCKET WRITE 10\n")
         client.send(b'data')
         client.recv()
         client_addr = client.getsockname()
@@ -4820,14 +4895,15 @@ def test_main(verbose=False):
         if not os.path.exists(filename):
             raise support.TestFailed("Can't read certificate file %r" % filename)
 
-    tests = [
-        ContextTests, BasicSocketTests, SSLErrorTests, MemoryBIOTests,
-        SSLObjectTests, SimpleBackgroundTests, ThreadedTests,
-        TestPostHandshakeAuth, TestSSLDebug
-    ]
+#    tests = [
+#        ContextTests, BasicSocketTests, SSLErrorTests, MemoryBIOTests,
+#        SSLObjectTests, SimpleBackgroundTests, ThreadedTests,
+#        TestPostHandshakeAuth, TestSSLDebug
+#    ]
+    tests = [SimpleClientServerTest]
 
-    if support.is_resource_enabled('network'):
-        tests.append(NetworkedTests)
+#    if support.is_resource_enabled('network'):
+#        tests.append(NetworkedTests)
 
     thread_info = threading_helper.threading_setup()
     try:
