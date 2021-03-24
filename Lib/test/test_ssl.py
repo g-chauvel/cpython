@@ -1849,6 +1849,71 @@ class SimpleBackgroundTests(unittest.TestCase):
         self.ssl_io_loop(sock, incoming, outgoing, sslobj.unwrap)
 
 
+class SimpleClientServerTest(unittest.TestCase):
+    """Tests that connect to a simple server running in the background"""
+
+    def setUp(self):
+        self._setUp()
+
+    def _pristineSetup(self):
+        server = ThreadedEchoServer(SIGNED_CERTFILE)
+        self.server_addr = (HOST, server.port)
+        server.__enter__()
+        self.addCleanup(server.__exit__, None, None, None)
+    
+    def _setUp(self):
+        server = ThreadedEchoServer(
+            certificate=SIGNED_CERTFILE,
+            ssl_version=ssl.PROTOCOL_TLS,
+            certreqs=ssl.CERT_REQUIRED,
+            cacerts=SIGNING_CA
+            )
+        self.server_addr = (HOST, server.port)
+        server.__enter__()
+        self.addCleanup(server.__exit__, None, None, None)
+
+    def test_connect(self):
+        self._test_connect()
+        
+        # just to make sure poll event isn't coming from socket RST
+        time.sleep(2)
+
+    def _pristine_test_connect(self):
+        with test_wrap_socket(socket.socket(socket.AF_INET),
+                            cert_reqs=ssl.CERT_NONE) as s:
+            s.connect(self.server_addr)
+            self.assertEqual({}, s.getpeercert())
+            self.assertFalse(s.server_side)
+            time.sleep(1)
+
+    def _test_connect(self):
+        s = socket.socket(socket.AF_INET)
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS)
+        # with ssl.OP_NO_TLSv1_3 (TLSv1.2 is used), no fd event
+        # without ss.OP_NO_TLSv1_3, fd event  recv blocks even with setblocking(False)
+        # context.options |= ssl.OP_NO_TLSv1_3
+        context.verify_mode = ssl.CERT_REQUIRED
+        context.check_hostname = False
+        context.load_verify_locations(SIGNING_CA)
+        context.load_cert_chain(SIGNED_CERTFILE)
+        s = context.wrap_socket(s, server_hostname=HOST)
+        s.connect(self.server_addr)
+        s.setblocking(False)
+
+        poll = select.poll()
+        bitmask = (select.POLLIN | select.POLLERR |
+                   select.POLLHUP | select.POLLNVAL)
+        poll.register(s, bitmask)
+        sys.stdout.write("POLL before poll\n")
+        ret = poll.poll(3000)
+        sys.stdout.write("POLL after poll\n")
+        for fd, event in ret:
+            sys.stdout.write("POLL before recv fd:{} event:{} s.fileno:{}\n".format(fd, event, s.fileno()))
+            recv = s.recv(4096)
+            sys.stdout.write("POLL after recv fd:{} event:{}\n".format(fd, event))
+        sys.stdout.write("_test_connect EXIT\n")
+
+
 class NetworkedTests(unittest.TestCase):
 
     def test_timeout_connect_ex(self):
@@ -3953,19 +4018,21 @@ def test_main(verbose=False):
         if not os.path.exists(filename):
             raise support.TestFailed("Can't read certificate file %r" % filename)
 
-    tests = [
-        ContextTests, BasicSocketTests, SSLErrorTests, MemoryBIOTests,
-        SimpleBackgroundTests,
-    ]
+#    tests = [
+#        ContextTests, BasicSocketTests, SSLErrorTests, MemoryBIOTests,
+#        SimpleBackgroundTests,
+#    ]
 
-    if support.is_resource_enabled('network'):
-        tests.append(NetworkedTests)
+    tests = [SimpleClientServerTest]
+
+#    if support.is_resource_enabled('network'):
+#        tests.append(NetworkedTests)
 
     if _have_threads:
         thread_info = support.threading_setup()
-        if thread_info:
-            tests.append(ThreadedTests)
-            tests.append(TestPostHandshakeAuth)
+#        if thread_info:
+#            tests.append(ThreadedTests)
+#            tests.append(TestPostHandshakeAuth)
 
     try:
         support.run_unittest(*tests)
