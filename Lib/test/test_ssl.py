@@ -2347,7 +2347,10 @@ class SimpleClientServerTest(unittest.TestCase):
         sys.stdout.write("POLL after poll\n")
         for fd, event in ret:
             sys.stdout.write("POLL before recv fd:{} event:{} s.fileno:{}\n".format(fd, event, s.fileno()))
-            recv = s.recv(4096)
+            try:
+                recv = s.recv(4096)
+            except ssl.SSLWantReadError:
+                pass
             sys.stdout.write("POLL after recv fd:{} event:{}\n".format(fd, event))
         sys.stdout.write("_test_connect EXIT\n")
 
